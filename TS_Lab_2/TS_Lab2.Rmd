@@ -1,0 +1,122 @@
+---
+title: "TS Lab 2 -- Survival Analysis"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+I will use discrete event history analysis since observations in the GSS Panel Data occur at regular intervals (2 years), and I chose a "failure" variable that is the religious preference of people (RELIG), which will be made binary (having a religion or not) to measure the event occurrence of religious people. For categories in the variable, 4) is None and other options are different religions.
+
+I will include year, age, sex, education, race, spouse's religion, and family's religion as my independent variables. I expect that overall, less people became religious as time went by, but in terms of age, more people became religious as they were older, and less people "became" religious after 60 years old. For sex, I expect that women were more likely to become religious than men. And for education, I expect that people with higher educational levels were less likely to become religious. For race, I cannot say which one may be more religious since different cultures have different religions, but maybe there are differences in the degree of religiousness, so I put it here. Lastly, I expect that if spouse and family were religious, people were more likely to become religious.
+
+```{r}
+pan = read.csv("/Users/sisi/Desktop/panel-for-R.csv")
+vars <- c("idnum", "relig", "panelwave", "year", "age", "sex", "educ", "race", "sprel", "relig16")
+sub <- pan[, vars]
+```
+
+Since the dataset only includes observations in 2006, 2008, and 2010, my “risk window" will be from 2006 to 2010. I will deal with left censoring by dropping data for those who already had a religion in 2006, with right truncation solved by discrete event history analysis. Over the time, people who are eligible for failure are those who did not have a religion in 2006 or before, and maybe those who are relatively younger, between 18 (the youngest age in the dataset) and 59. 
+
+```{r}
+# Distinguish between religious and non-religious people
+sub$r = ifelse(sub$relig==4,0,1)
+```
+
+```{r}
+# Start with only irreligious people
+sub$drop = ifelse(sub$r==1 & sub$panelwave==1, 1, 0)
+sub = merge(sub, aggregate(drop ~ idnum, data=sub, mean), by="idnum", suffixes=c("", ".all"))
+subpt = subset (sub, sub$drop.all==0)
+```
+
+```{r}
+# Create binary variables for spouse's religion and family's religion
+subpt$spr = ifelse(subpt$sprel==4,0,1)
+subpt$fam = ifelse(subpt$relig16==4,0,1)
+```
+
+```{r}
+# Adjust the years to be related to the start year 2006
+subpt$nyear = subpt$year-2006
+```
+
+```{r}
+# See if people became religious in wave 2 or both wave 2 and 3
+subpt$ytwo = ifelse(subpt$r==1 & subpt$panelwave==2, 2, 0)
+subpt = merge(subpt, aggregate(ytwo ~ idnum, data=subpt, max), by="idnum", suffixes=c("", ".two"))
+```
+
+```{r}
+# See if people became religious in wave 3
+subpt$ythree = ifelse(subpt$r==1 & subpt$panelwave==3, 3, 0)
+subpt = merge(subpt, aggregate(ythree ~ idnum, data=subpt, max), by="idnum", suffixes=c("", ".three"))
+```
+
+```{r}
+# See what the pattern of becoming religious is across time
+subpt$combo <- do.call(paste, c(subpt[c("ytwo.two", "ythree.three")], sep = ""))
+table(subpt$combo)
+```
+
+```{r}
+# Make people who were already religious in 2008 missing in 2010
+subpt$r[subpt$combo=="20" & subpt$year==2010] <- NA
+subpt$r[subpt$combo=="23" & subpt$year==2010] <- NA
+```
+
+### Model 1: How does time affect being religious?
+
+```{r}
+library(pscl)
+model1 <- glm(r ~ as.factor(nyear), subpt, family = "binomial", subset = subpt$year>2006)
+summary(model1)
+pR2(model1)
+```
+
+Wave 3 lowers the logit of becoming religious by -0.666, relative to Wave 2. It is statistically significant with a p-value of 0.01. The result is consistent with my expectation, since there are less people becoming religious in Wave 3. The r-sq of this model is -1.51, which shows a poor model fit.
+
+### Model 2: What factors predict religion?
+
+```{r}
+model2 <- glm(r ~ as.factor(nyear) + age + sex + educ + as.factor(race) + spr + fam, subpt, family = "binomial", subset = subpt$year>2006)
+summary(model2)
+pR2(model2)
+```
+
+First, we can see that net of other factors, Wave 3 lowers the logit of becoming religious by -1.07, relative to Wave 2. It is statistically significant with a p-value of 0.03. And it still fits my expectation as less people became religious in Wave 3.
+
+For each year older people become, their logit of becoming religious increases by 0.023 on average, net of other factors. It is not statistically significant with a p-value of 0.12.
+
+The logit of becoming religious for women is 0.681 higher than men on average, net of other factors. It is not statistically significant with a p-value of 0.14.
+
+For each year more education people have, their logit of becoming religious decreases by -0.118, net of other factors. It is not statistically significant with a p-value of 0.09.
+
+Compared to white people, black people's logit of becoming religious is lower by -0.637, and other people's logit is higher by 0.386, on average and net of other factors. Their p-values are 0.46 and 0.59, so both of these results are not statistically significant.
+
+Lastly, if spouse and family are religious, people' logits of becoming religious increase by 2.129 and 1.315, on average and net of other factors. The result of spouse is highly statistically significant with a p-value smaller than 0.001, and the result of family is not statistically significant with a p-value of 0.07.
+
+The results are all consistent with my expectation. More people became religious as they were older, female, or having a religious spouse or family, and having a religious spouse influenced people to become religious the most. At the same time, higher education levels led to less people becoming religious, which also fits my expectation. From the results of race, we can notice that people with other races had most people becoming religious, followed by white people, and followed by black people.
+
+The r-sq of this model is -0.95, which shows a poor model fit.
+
+### Model 3: What about "younger" people?
+
+```{r}
+model3 <- glm(r ~ as.factor(nyear) + age + sex + educ + as.factor(race) + spr + fam, subpt, family = "binomial", subset = subpt$year>2006 & subpt$age>17 & subpt$age<60)
+summary(model3)
+pR2(model3)
+```
+
+The coefficient on age is stronger (0.045) than before (0.023), and its p-value decreases to 0.1, but it is still not statistically significant. The result is consistent with my expectation as younger people became religious in a steeper trend. The r-sq of this model is -1.3, which shows a poor model fit.
+
+### Model 4: How does sex affect "younger" people's religion over time?
+
+```{r}
+model4 <- glm(r ~ as.factor(nyear)*sex + age + educ + as.factor(race) + spr + fam, subpt, family = "binomial", subset=subpt$year>2006 & subpt$age>17 & subpt$age<60)
+summary(model4)
+pR2(model4)
+```
+
+In Wave 3, the logit of becoming religious for women is 0.264 higher than men, on average and net of other factors. It is highly not statistically significant as the p-value is 0.84. The result is consistent with my expectation, since over time, women were still more in becoming religious. The r-sq of this model is -1.3, which shows a poor model fit.
